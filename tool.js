@@ -13,10 +13,12 @@
  * @param {string} description
  * @param {object} inputSchema - JSON Schema
  * @param {function} handler - async (args) => result
+ * @param {object} [options] - outputSchema / annotations / _meta
  * @returns {object}
  */
-function defineTool(name, description, inputSchema, handler) {
+function defineTool(name, description, inputSchema, handler, options) {
     if (typeof inputSchema === 'function') {
+        options = handler;
         handler = inputSchema;
         inputSchema = { type: 'object', properties: {} };
     }
@@ -24,19 +26,23 @@ function defineTool(name, description, inputSchema, handler) {
     if (inputSchema && typeof inputSchema === 'object' && !inputSchema.type) {
         inputSchema = { type: 'object', properties: inputSchema };
     }
-    return {
+    const def = {
         name,
         description,
         inputSchema: inputSchema || { type: 'object', properties: {} },
         handler,
     };
+    if (options && options.outputSchema) def.outputSchema = options.outputSchema;
+    if (options && options.annotations) def.annotations = options.annotations;
+    if (options && options._meta) def._meta = options._meta;
+    return def;
 }
 
 /**
  * 创建带描述的工具（可选参数版）
  */
-function tool(name, description, inputSchema, handler) {
-    return defineTool(name, description, inputSchema, handler);
+function tool(name, description, inputSchema, handler, options) {
+    return defineTool(name, description, inputSchema, handler, options);
 }
 
 /**

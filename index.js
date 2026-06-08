@@ -96,6 +96,17 @@ function generateMavisEntry(name, port) {
     };
 }
 
+function generateOpenAIResponsesTool(name, serverUrl, options) {
+    options = options || {};
+    return {
+        type: 'mcp',
+        server_label: options.serverLabel || name,
+        server_description: options.serverDescription || `MCP Server: ${name}`,
+        server_url: serverUrl,
+        require_approval: options.requireApproval || 'always',
+    };
+}
+
 // ── createServer 主函数 ─────────────────────────────────────────
 function createServer(options) {
     options = options || {};
@@ -106,7 +117,14 @@ function createServer(options) {
     const customHandlers = options.customHandlers || {};
 
     // 初始化 dispatcher
-    const dispatcher = createDispatcher({ name, version, tools, resources, customHandlers });
+    const dispatcher = createDispatcher({
+        name,
+        version,
+        protocolVersion: options.protocolVersion,
+        tools,
+        resources,
+        customHandlers,
+    });
 
     // 启动后的引用
     let stdioTransport = null;
@@ -130,7 +148,13 @@ function createServer(options) {
                 if (!isNaN(parsed)) startPort = parsed;
             }
             const port = await findAvailablePort(startPort);
-            httpTransport = createHttpTransport(dispatcher, { port, host: '127.0.0.1', path: '/mcp' });
+            httpTransport = createHttpTransport(dispatcher, {
+                port,
+                host: options.host || '127.0.0.1',
+                path: options.path || '/mcp',
+                protocolVersion: options.protocolVersion,
+                allowedOrigins: options.allowedOrigins,
+            });
             httpTransport.start();
         }
     }
@@ -166,12 +190,16 @@ function createServer(options) {
         const port = options.port || 8080;
         const entry = generateMcpJson(options.entryPoint || process.argv[1] || 'mcp-server.js', port);
         const mavisEntry = generateMavisEntry(name, port);
+        const localMcpUrl = `http://127.0.0.1:${port}/mcp`;
+        const openAIEntry = generateOpenAIResponsesTool(name, localMcpUrl);
 
         console.log('\n=== MCP Server Config ===\n');
         console.log('// Claude Code / Cursor (mcp.json)');
         console.log(JSON.stringify(entry, null, 2));
         console.log('\n// Mavis (~/.mavis/mcp/mcp.json)');
         console.log(JSON.stringify(mavisEntry, null, 2));
+        console.log('\n// OpenAI Responses API (replace server_url with a public HTTPS /mcp URL or tunnel URL)');
+        console.log(JSON.stringify(openAIEntry, null, 2));
         console.log('');
     }
 
@@ -186,6 +214,7 @@ function createServer(options) {
         printConfig,
         generateMcpJson,
         generateMavisEntry,
+        generateOpenAIResponsesTool,
     };
 }
 
@@ -211,6 +240,7 @@ module.exports = {
     // transport（供高级用法）
     createStdioTransport,
     createHttpTransport: createHttpTransportAlias,
+    generateOpenAIResponsesTool,
     // 内部协议（供高级用法）
     createDispatcher,
 };

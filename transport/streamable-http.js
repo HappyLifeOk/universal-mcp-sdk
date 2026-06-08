@@ -15,17 +15,37 @@
 const http = require('http');
 const url = require('url');
 
+const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['2025-03-26', '2025-06-18']);
+
 function createHttpTransport(dispatcher, options) {
     options = options || {};
     const port = options.port || 8080;
     const host = options.host || '127.0.0.1';
     const path = options.path || '/mcp';
+    const protocolVersion = options.protocolVersion || DEFAULT_PROTOCOL_VERSION;
+    const allowedOrigins = options.allowedOrigins || null;
 
     let server = null;
+
+    function setCommonHeaders(res) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', [
+            'Authorization',
+            'Content-Type',
+            'Accept',
+            'MCP-Protocol-Version',
+            'Mcp-Session-Id',
+            'Last-Event-ID',
+        ].join(', '));
+        res.setHeader('MCP-Protocol-Version', protocolVersion);
+    }
 
     // ── 发送 JSON-RPC 响应的辅助函数 ─────────────────────────────
     function sendJson(res, statusCode, body) {
         const data = JSON.stringify(body);
+        setCommonHeaders(res);
         res.writeHead(statusCode, {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(data),
@@ -41,16 +61,63 @@ function createHttpTransport(dispatcher, options) {
         });
     }
 
+    function sendAccepted(res) {
+        setCommonHeaders(res);
+        res.writeHead(202);
+        res.end();
+    }
+
+    function isAllowedOrigin(req) {
+        if (!allowedOrigins || allowedOrigins.length === 0) return true;
+        const origin = req.headers.origin;
+        if (!origin) return true;
+        return allowedOrigins.includes(origin);
+    }
+
+    function hasCompatibleProtocolHeader(req) {
+        const requested = req.headers['mcp-protocol-version'];
+        if (!requested) return true;
+        return SUPPORTED_PROTOCOL_VERSIONS.has(String(requested));
+    }
+
+    function isJsonRpcNotificationOrResponse(message) {
+        if (Array.isArray(message)) {
+            return message.length > 0 && message.every(isJsonRpcNotificationOrResponse);
+        }
+        if (!message || message.jsonrpc !== '2.0') return false;
+        if (typeof message.method === 'string' && message.id === undefined) return true;
+        return typeof message.method !== 'string' && (message.result !== undefined || message.error !== undefined);
+    }
+
+    async function dispatchMessage(message) {
+        if (Array.isArray(message)) {
+            const responses = [];
+            for (const item of message) {
+                const response = await dispatcher.dispatchAsync(item);
+                if (response) responses.push(response);
+            }
+            return responses.length > 0 ? responses : null;
+        }
+        return dispatcher.dispatchAsync(message);
+    }
+
     // ── 处理 POST /mcp ───────────────────────────────────────────
     async function handleMcpPost(req, res) {
-        // CORS（允许跨域，方便不同客户端调用）
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        setCommonHeaders(res);
 
         if (req.method === 'OPTIONS') {
             res.writeHead(204);
             res.end();
+            return;
+        }
+
+        if (!isAllowedOrigin(req)) {
+            sendError(res, 403, -32600, 'Forbidden origin');
+            return;
+        }
+
+        if (!hasCompatibleProtocolHeader(req)) {
+            sendError(res, 400, -32600, 'Unsupported MCP-Protocol-Version');
             return;
         }
 
@@ -72,13 +139,16 @@ function createHttpTransport(dispatcher, options) {
             }
 
             try {
-                const resJson = await dispatcher.dispatchAsync(reqJson);
+                if (isJsonRpcNotificationOrResponse(reqJson)) {
+                    sendAccepted(res);
+                    return;
+                }
+
+                const resJson = await dispatchMessage(reqJson);
                 if (resJson) {
                     sendJson(res, 200, resJson);
                 } else {
-                    // notification，无响应
-                    res.writeHead(204);
-                    res.end();
+                    sendAccepted(res);
                 }
             } catch (err) {
                 sendJson(res, 200, {
@@ -92,8 +162,7 @@ function createHttpTransport(dispatcher, options) {
 
     // ── 处理 GET /mcp（初始化握手）────────────────────────────────
     function handleMcpGet(req, res) {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+        setCommonHeaders(res);
 
         if (req.method === 'OPTIONS') {
             res.writeHead(204);
@@ -105,6 +174,7 @@ function createHttpTransport(dispatcher, options) {
         sendJson(res, 200, {
             name: 'mcp-sdk-http-transport',
             version: '1.0.0',
+            protocolVersion,
             endpoints: {
                 'POST /mcp': 'Send JSON-RPC 2.0 request, receive JSON-RPC 2.0 response',
                 'GET /mcp': 'Server info and endpoint documentation',

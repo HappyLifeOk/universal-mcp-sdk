@@ -4,7 +4,10 @@
 
 - **Claude Code** / **Cursor** — stdio 传输
 - **Mavis** — streamable-http 传输
+- **OpenAI / ChatGPT** — remote MCP（streamable-http，需公网 HTTPS `/mcp` 或 Secure MCP Tunnel）
 - **任何 HTTP-based AI Agent** — streamable-http 传输
+
+> OpenAI Responses API 与 ChatGPT Apps 侧接入时，`server_url` 必须是外部可访问的 HTTPS `/mcp` 端点；本机 `127.0.0.1` 只适合本地客户端或通过 Secure MCP Tunnel / ngrok / Cloudflare Tunnel 暴露。
 
 ---
 
@@ -116,7 +119,7 @@ server.start();
 | 模式 | 命令 | 适用场景 |
 |------|------|---------|
 | stdio | `node your-server.js --stdio` | Claude Code / Cursor（子进程） |
-| http | `node your-server.js --http --port 8080` | Mavis / HTTP Agent（常驻服务），--port 真正生效 |
+| http | `node your-server.js --http --port 8080` | Mavis / OpenAI / HTTP Agent（常驻服务），--port 真正生效 |
 | auto | `node your-server.js` | 自动检测：TTY → stdio，否则 → HTTP |
 
 ---
@@ -155,6 +158,33 @@ server.start();
   }
 }
 ```
+
+### OpenAI Responses API / ChatGPT
+
+OpenAI 侧使用 remote MCP 时，需要一个公网 HTTPS `/mcp` 地址。本地调试可先用 Secure MCP Tunnel、ngrok 或 Cloudflare Tunnel 把 `http://127.0.0.1:<port>/mcp` 暴露出去。
+
+Responses API 示例：
+
+```js
+const OpenAI = require('openai');
+const client = new OpenAI();
+
+const resp = await client.responses.create({
+    model: 'gpt-5.5',
+    tools: [{
+        type: 'mcp',
+        server_label: 'my_mcp',
+        server_description: 'My MCP server',
+        server_url: 'https://your-domain.example/mcp',
+        require_approval: 'always',
+    }],
+    input: 'Call a tool from my MCP server.',
+});
+
+console.log(resp.output_text);
+```
+
+ChatGPT Apps / Connectors 开发者模式里创建 connector 时，`Connector URL` 填同一个公网 HTTPS `/mcp` 地址。
 
 ### 其他 HTTP Agent
 

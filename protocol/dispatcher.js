@@ -7,6 +7,8 @@
 
 const { textContent, errorContent } = require('./content');
 
+const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
+
 /**
  * 创建 MCP 分发器
  * @param {object} options
@@ -19,16 +21,21 @@ const { textContent, errorContent } = require('./content');
 function createDispatcher(options) {
     const name = options.name || 'unknown';
     const version = options.version || '1.0.0';
+    const protocolVersion = options.protocolVersion || DEFAULT_PROTOCOL_VERSION;
     const tools = options.tools || [];
     const resources = options.resources || [];
     const customHandlers = options.customHandlers || {};
 
     function toToolSchema(tool) {
-        return {
+        const schema = {
             name: tool.name,
             description: tool.description || '',
             inputSchema: tool.inputSchema || { type: 'object', properties: {} },
         };
+        if (tool.outputSchema) schema.outputSchema = tool.outputSchema;
+        if (tool.annotations) schema.annotations = tool.annotations;
+        if (tool._meta) schema._meta = tool._meta;
+        return schema;
     }
 
     function toResourceSchema(res) {
@@ -46,6 +53,21 @@ function createDispatcher(options) {
         if (Array.isArray(result) && result[0] && result[0].type) return result;
         if (result && result.type && result.text !== undefined) return [result];
         return [textContent(JSON.stringify(result, null, 2))];
+    }
+
+    function normalizeToolResult(result) {
+        if (result && typeof result === 'object' && !Array.isArray(result)) {
+            const out = {};
+            if (result.content !== undefined) out.content = result.content;
+            if (result.structuredContent !== undefined) out.structuredContent = result.structuredContent;
+            if (result._meta !== undefined) out._meta = result._meta;
+            if (result.isError !== undefined) out.isError = result.isError;
+            if (Object.keys(out).length > 0) {
+                if (!out.content) out.content = wrapContent(out.structuredContent || '(ok)');
+                return out;
+            }
+        }
+        return { content: wrapContent(result) };
     }
 
     function makeErrorResponse(id, message, code = -32603) {
@@ -71,7 +93,7 @@ function createDispatcher(options) {
         switch (method) {
             case 'initialize':
                 return makeSuccessResponse(id, {
-                    protocolVersion: '2024-11-05',
+                    protocolVersion,
                     capabilities: {
                         tools: tools.length > 0 ? {} : undefined,
                         resources: resources.length > 0 ? {} : undefined,
@@ -132,9 +154,12 @@ function createDispatcher(options) {
                 }
                 try {
                     const result = await tool.handler(params.arguments || {});
-                    return makeSuccessResponse(id, { content: wrapContent(result) });
+                    return makeSuccessResponse(id, normalizeToolResult(result));
                 } catch (e) {
-                    return makeSuccessResponse(id, { content: [errorContent(`[${params.name}] Error: ${e.message}`)] });
+                    return makeSuccessResponse(id, {
+                        content: [errorContent(`[${params.name}] Error: ${e.message}`)],
+                        isError: true,
+                    });
                 }
             }
 
